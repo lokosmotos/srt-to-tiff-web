@@ -1,6 +1,6 @@
-flask
-pillow
-srt
-arabic-reshaper
-python-bidi
-gunicorn==20.1.0  # Explicit version for stability
+flask==2.3.2
+pillow==10.0.0
+srt==3.5.2
+arabic-reshaper==2.1.4
+python-bidi==0.4.2
+gunicorn==20.1.0
