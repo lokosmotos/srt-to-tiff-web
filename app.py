@@ -19,9 +19,10 @@ IMAGE_WIDTH = 720
 IMAGE_HEIGHT = 480
 BG_COLOR = (0, 0, 255)  # Blue background
 TEXT_COLOR = (255, 255, 255)  # White text
-FONT_SIZE = 26
+FONT_SIZE = 24
+LINE_SPACING = 8
+MAX_LINES = 3  # Maximum lines to display
 MAX_FILE_SIZE = 2 * 1024 * 1024  # 2MB
-LINE_SPACING = 10  # Space between lines for multiline text
 
 # Font handling with fallback
 try:
@@ -33,49 +34,40 @@ except Exception as e:
     try:
         FONT_PATH = "arial.ttf"
         font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
-        logger.info(f"Fell back to Arial font")
+        logger.info("Fell back to Arial font")
     except:
         font = ImageFont.load_default()
         logger.warning("Using default font - Arabic display may be compromised")
 
 def create_tiff_from_subtitle(subtitle, index):
-    """Create a TIFF image from subtitle text with RTL and multiline support"""
+    """Create a TIFF image from subtitle text with RTL support"""
     try:
         image = Image.new("RGB", (IMAGE_WIDTH, IMAGE_HEIGHT), BG_COLOR)
         draw = ImageDraw.Draw(image)
         
-        # Split subtitle content into lines
-        arabic_text = subtitle.content
-        lines = arabic_text.split('\n')
-        processed_lines = [(reshape(line), get_display(reshape(line))) for line in lines if line.strip()]
+        # Process Arabic text
+        arabic_text = subtitle.content.replace('\r', '')  # Remove carriage returns
+        reshaped_text = reshape(arabic_text)
+        bidi_text = get_display(reshaped_text)
         
-        if not processed_lines:
-            logger.warning(f"Empty subtitle content for index {index}")
-            return None, None
+        # Handle multiline text
+        lines = [line for line in bidi_text.split('\n') if line.strip()][:MAX_LINES]
+        line_height = FONT_SIZE + LINE_SPACING
+        total_height = len(lines) * line_height
         
-        # Calculate total height and max width
-        total_height = len(processed_lines) * FONT_SIZE + (len(processed_lines) - 1) * LINE_SPACING
-        max_width = 0
-        for _, bidi_text in processed_lines:
-            try:
-                text_width = draw.textlength(bidi_text, font=font)
-                max_width = max(max_width, text_width)
-            except Exception as e:
-                logger.error(f"Failed to measure text width for subtitle {index}: {str(e)}")
-                return None, None
-        
-        # Calculate starting position (center horizontally, bottom-aligned vertically)
-        x = (IMAGE_WIDTH - max_width) / 2
-        y = IMAGE_HEIGHT - total_height - 20
+        # Start position (centered vertically)
+        y = (IMAGE_HEIGHT - total_height) / 2
         
         # Draw each line
-        for _, bidi_text in processed_lines:
+        for line in lines:
             try:
-                draw.text((x, y), bidi_text, font=font, fill=TEXT_COLOR)
-                y += FONT_SIZE + LINE_SPACING
-            except Exception as e:
-                logger.error(f"Failed to draw text for subtitle {index}: {str(e)}")
-                return None, None
+                text_width = draw.textlength(line, font=font)
+                x = (IMAGE_WIDTH - text_width) / 2
+                draw.text((x, y), line, font=font, fill=TEXT_COLOR)
+                y += line_height
+            except Exception as line_error:
+                logger.error(f"Failed to draw line: {line_error}")
+                continue
         
         # Save to compressed TIFF
         output = io.BytesIO()
@@ -85,7 +77,7 @@ def create_tiff_from_subtitle(subtitle, index):
         return output, f"subtitle_{index:04d}.tiff"
     except Exception as e:
         logger.error(f"Image creation failed for subtitle {index}: {str(e)}")
-        return None, None
+        raise
 
 @app.route("/", methods=["GET"])
 def index():
@@ -98,6 +90,7 @@ def index():
             body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
             input, button { margin: 10px; }
             .error { color: red; }
+            #status { margin-top: 20px; min-height: 20px; }
         </style>
     </head>
     <body>
@@ -106,12 +99,12 @@ def index():
             <input type="file" id="srtFile" name="srt_file" accept=".srt" required>
             <button type="submit">Convert to TIFF</button>
         </form>
-        <p id="status"></p>
+        <div id="status"></div>
         <script>
             document.getElementById('uploadForm').addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const status = document.getElementById('status');
-                status.textContent = "Uploading...";
+                status.innerHTML = '<p>Processing... Please wait</p>';
                 
                 const formData = new FormData();
                 formData.append('srt_file', document.getElementById('srtFile').files[0]);
@@ -127,15 +120,17 @@ def index():
                         const url = window.URL.createObjectURL(blob);
                         const a = document.createElement('a');
                         a.href = url;
-                        a.download = 'subtitles_tiff.zip';
+                        a.download = 'arabic_subtitles.zip';
+                        document.body.appendChild(a);
                         a.click();
-                        status.textContent = "Conversion successful!";
+                        document.body.removeChild(a);
+                        status.innerHTML = '<p>Conversion successful! Download should start automatically.</p>';
                     } else {
                         const error = await response.text();
-                        status.innerHTML = `<span class="error">Error: ${error}</span>`;
+                        status.innerHTML = `<p class="error">Error: ${error}</p>`;
                     }
                 } catch (err) {
-                    status.innerHTML = `<span class="error">Network error: ${err.message}</span>`;
+                    status.innerHTML = `<p class="error">Network error: ${err.message}</p>`;
                 }
             });
         </script>
@@ -159,10 +154,16 @@ def convert_srt_to_tiff():
         if not srt_file.filename.lower().endswith('.srt'):
             return "Only SRT files are allowed", 400
             
+        # Check file size
+        srt_file.seek(0, os.SEEK_END)
+        file_size = srt_file.tell()
+        srt_file.seek(0)
+        if file_size > MAX_FILE_SIZE:
+            return f"File too large (max {MAX_FILE_SIZE/1024/1024}MB)", 400
+            
         # Read and decode file
         try:
             srt_content = srt_file.read().decode('utf-8-sig')  # Handle BOM
-            srt_file.seek(0)  # Reset file pointer
         except UnicodeDecodeError:
             return "Invalid file encoding (use UTF-8)", 400
             
@@ -175,26 +176,19 @@ def convert_srt_to_tiff():
             
         # Process subtitles
         zip_buffer = io.BytesIO()
-        valid_files = 0
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            success_count = 0
             for index, subtitle in enumerate(subtitles, 1):
                 try:
                     tiff_buffer, filename = create_tiff_from_subtitle(subtitle, index)
-                    if tiff_buffer and filename:
-                        zip_file.writestr(filename, tiff_buffer.getvalue())
-                        valid_files += 1
-                    else:
-                        logger.warning(f"Skipped subtitle {index} due to processing error")
+                    zip_file.writestr(filename, tiff_buffer.getvalue())
+                    success_count += 1
                 except Exception as e:
-                    logger.error(f"Unexpected error processing subtitle {index}: {str(e)}")
-                    continue  # Skip failed subtitles
-                
-                # Optional: Log progress
-                if index % 100 == 0:
-                    logger.info(f"Processed {index} subtitles so far")
-        
-        if valid_files == 0:
-            return "No valid subtitles could be processed", 400
+                    logger.error(f"Skipped subtitle {index}: {str(e)}")
+                    continue
+            
+            if success_count == 0:
+                return "No valid subtitles could be processed", 400
             
         zip_buffer.seek(0)
         return send_file(
@@ -205,8 +199,8 @@ def convert_srt_to_tiff():
         )
         
     except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
-        return "Internal server error", 500
+        logger.error(f"Unexpected error in conversion: {str(e)}")
+        return "Internal server error during conversion", 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
