@@ -98,18 +98,12 @@ def convert_srt_to_tiff():
         return "No file uploaded", 400
     
     srt_file = request.files["srt_file"]
-    try:
-        srt_content = srt_file.read().decode("utf-8")
-    except UnicodeDecodeError:
-        return "Invalid SRT file encoding. Please use UTF-8.", 400
+    srt_content = srt_file.read().decode("utf-8")
     
-    # Parse SRT
-    try:
-        subtitles = list(srt.parse_srt(srt_content))
-    except Exception as e:
-        return f"Error parsing SRT: {str(e)}", 400
+    # Updated SRT parsing - use srt.parse() instead of parse_srt()
+    subtitles = list(srt.parse(srt_content))  # Changed this line
     
-    # Create ZIP file in memory
+    # Rest of your function remains the same
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
         for index, subtitle in enumerate(subtitles, 1):
