@@ -21,6 +21,7 @@ BG_COLOR = (0, 0, 255)  # Blue background
 TEXT_COLOR = (255, 255, 255)  # White text
 FONT_SIZE = 26
 MAX_FILE_SIZE = 2 * 1024 * 1024  # 2MB
+LINE_SPACING = 10  # Space between lines for multiline text
 
 # Font handling with fallback
 try:
@@ -38,24 +39,43 @@ except Exception as e:
         logger.warning("Using default font - Arabic display may be compromised")
 
 def create_tiff_from_subtitle(subtitle, index):
-    """Create a TIFF image from subtitle text with RTL support"""
+    """Create a TIFF image from subtitle text with RTL and multiline support"""
     try:
         image = Image.new("RGB", (IMAGE_WIDTH, IMAGE_HEIGHT), BG_COLOR)
         draw = ImageDraw.Draw(image)
         
-        # Process Arabic text
+        # Split subtitle content into lines
         arabic_text = subtitle.content
-        reshaped_text = reshape(arabic_text)
-        bidi_text = get_display(reshaped_text)
+        lines = arabic_text.split('\n')
+        processed_lines = [(reshape(line), get_display(reshape(line))) for line in lines if line.strip()]
         
-        # Calculate text position
-        text_width = draw.textlength(bidi_text, font=font)
-        text_height = FONT_SIZE
-        x = (IMAGE_WIDTH - text_width) / 2
-        y = IMAGE_HEIGHT - text_height - 20
+        if not processed_lines:
+            logger.warning(f"Empty subtitle content for index {index}")
+            return None, None
         
-        # Draw text
-        draw.text((x, y), bidi_text, font=font, fill=TEXT_COLOR)
+        # Calculate total height and max width
+        total_height = len(processed_lines) * FONT_SIZE + (len(processed_lines) - 1) * LINE_SPACING
+        max_width = 0
+        for _, bidi_text in processed_lines:
+            try:
+                text_width = draw.textlength(bidi_text, font=font)
+                max_width = max(max_width, text_width)
+            except Exception as e:
+                logger.error(f"Failed to measure text width for subtitle {index}: {str(e)}")
+                return None, None
+        
+        # Calculate starting position (center horizontally, bottom-aligned vertically)
+        x = (IMAGE_WIDTH - max_width) / 2
+        y = IMAGE_HEIGHT - total_height - 20
+        
+        # Draw each line
+        for _, bidi_text in processed_lines:
+            try:
+                draw.text((x, y), bidi_text, font=font, fill=TEXT_COLOR)
+                y += FONT_SIZE + LINE_SPACING
+            except Exception as e:
+                logger.error(f"Failed to draw text for subtitle {index}: {str(e)}")
+                return None, None
         
         # Save to compressed TIFF
         output = io.BytesIO()
@@ -64,8 +84,8 @@ def create_tiff_from_subtitle(subtitle, index):
         
         return output, f"subtitle_{index:04d}.tiff"
     except Exception as e:
-        logger.error(f"Image creation failed: {str(e)}")
-        raise
+        logger.error(f"Image creation failed for subtitle {index}: {str(e)}")
+        return None, None
 
 @app.route("/", methods=["GET"])
 def index():
@@ -155,16 +175,25 @@ def convert_srt_to_tiff():
             
         # Process subtitles
         zip_buffer = io.BytesIO()
+        valid_files = 0
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             for index, subtitle in enumerate(subtitles, 1):
                 try:
                     tiff_buffer, filename = create_tiff_from_subtitle(subtitle, index)
-                    zip_file.writestr(filename, tiff_buffer.getvalue())
+                    if tiff_buffer and filename:
+                        zip_file.writestr(filename, tiff_buffer.getvalue())
+                        valid_files += 1
+                    else:
+                    logger.warning(f"Skipped subtitle {index} due to processing error")
                 except Exception as e:
-                    logger.error(f"Failed to process subtitle {index}: {str(e)}")
-                    continue  # Skip failed subtitles but continue with others
+                    logger.error(f"Unexpected error processing subtitle {index}: {str(e)}")
+                    continue  # Skip failed subtitles
+                
+                # Optional: Add a timeout mechanism to prevent worker crashes
+                if index % 100 == 0:
+                    logger.info(f"Processed {index} subtitles so far")
         
-        if zip_file.namelist() == []:
+        if valid_files == 0:
             return "No valid subtitles could be processed", 400
             
         zip_buffer.seek(0)
@@ -179,7 +208,7 @@ def convert_srt_to_tiff():
         logger.error(f"Unexpected error: {str(e)}")
         return "Internal server error", 500
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    logger.info(f"Starting server on port {port}")
-    app.run(host="0.0.0.0", port=port)
+    if __name__ == "__main__":
+        port = int(os.environ.get("port_number", 5000))
+        logger.info(f"Starting server on port {port}")
+        app.run(host="0.0.0.0", port=port)
