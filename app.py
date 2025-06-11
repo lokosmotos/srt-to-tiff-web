@@ -20,8 +20,11 @@ def create_tiff_from_subtitle(subtitle, index):
     image = Image.new("RGB", (IMAGE_WIDTH, IMAGE_HEIGHT), BG_COLOR)
     draw = ImageDraw.Draw(image)
     
-    # Load Arial font
-    font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
+    # Load Arial font with fallback to system font
+    try:
+        font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
+    except:
+        font = ImageFont.load_default()  # Fallback if Arial fails
     
     # Arabic text with RTL
     text = subtitle.content
@@ -48,7 +51,7 @@ def index():
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Arabic SRT to TIFF</title>
+        <title>Arabic SRT to TIFF Converter</title>
         <style>
             body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
             input, button { margin: 10px; }
@@ -80,7 +83,8 @@ def index():
                     a.click();
                     status.textContent = "Download complete!";
                 } else {
-                    status.textContent = "Error during conversion.";
+                    const errorText = await response.text();
+                    status.textContent = `Error during conversion: ${errorText}`;
                 }
             }
         </script>
@@ -94,10 +98,16 @@ def convert_srt_to_tiff():
         return "No file uploaded", 400
     
     srt_file = request.files["srt_file"]
-    srt_content = srt_file.read().decode("utf-8")
+    try:
+        srt_content = srt_file.read().decode("utf-8")
+    except UnicodeDecodeError:
+        return "Invalid SRT file encoding. Please use UTF-8.", 400
     
     # Parse SRT
-    subtitles = list(srt.parse_srt(srt_content))
+    try:
+        subtitles = list(srt.parse_srt(srt_content))
+    except Exception as e:
+        return f"Error parsing SRT: {str(e)}", 400
     
     # Create ZIP file in memory
     zip_buffer = io.BytesIO()
