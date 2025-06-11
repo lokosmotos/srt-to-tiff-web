@@ -184,12 +184,12 @@ def convert_srt_to_tiff():
                         zip_file.writestr(filename, tiff_buffer.getvalue())
                         valid_files += 1
                     else:
-                    logger.warning(f"Skipped subtitle {index} due to processing error")
+                        logger.warning(f"Skipped subtitle {index} due to processing error")
                 except Exception as e:
                     logger.error(f"Unexpected error processing subtitle {index}: {str(e)}")
                     continue  # Skip failed subtitles
                 
-                # Optional: Add a timeout mechanism to prevent worker crashes
+                # Optional: Log progress
                 if index % 100 == 0:
                     logger.info(f"Processed {index} subtitles so far")
         
@@ -208,7 +208,7 @@ def convert_srt_to_tiff():
         logger.error(f"Unexpected error: {str(e)}")
         return "Internal server error", 500
 
-    if __name__ == "__main__":
-        port = int(os.environ.get("port_number", 5000))
-        logger.info(f"Starting server on port {port}")
-        app.run(host="0.0.0.0", port=port)
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    logger.info(f"Starting server on port {port}")
+    app.run(host="0.0.0.0", port=port)
